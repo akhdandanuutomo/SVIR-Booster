@@ -1,0 +1,367 @@
+"""
+SVIR WITH BOOSTER — FULL PYTHON PROGRAM (FINAL ACADEMIC VERSION)
+Mathematical Model, RK4 Numerical Solver, Simulation, Re(t), Cumulative Cases.
+
+Prepared for thesis research in epidemic modelling.
+Author: Akhdan Danu Utomo (2025)
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# =====================================================================
+# 1. RUNGE–KUTTA ORDE 4 (RK4)
+# =====================================================================
+
+def rk4_step(f, y, t, h, params):
+    """
+    Performs one Runge–Kutta 4 step for the ODE system y' = f(y, t, params).
+
+    Parameters
+    ----------
+    f : callable
+        RHS function of the ODE system.
+    y : ndarray
+        Current state vector.
+    t : float
+        Current time.
+    h : float
+        Step size.
+    params : dict
+        Model parameters.
+
+    Returns
+    -------
+    ndarray
+        Updated state at time t + h.
+    """
+    k1 = f(y, t, params)
+    k2 = f(y + 0.5*h*k1, t + 0.5*h, params)
+    k3 = f(y + 0.5*h*k2, t + 0.5*h, params)
+    k4 = f(y + h*k3, t + h, params)
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def integrate_rk4(f, y0, t_span, h, params):
+    """
+    Integrates ODE system using classical RK4.
+
+    Parameters
+    ----------
+    f : callable
+        RHS of ODE system.
+    y0 : ndarray
+        Initial state.
+    t_span : tuple
+        (t_start, t_end).
+    h : float
+        Step size.
+    params : dict
+        Parameters.
+
+    Returns
+    -------
+    t : ndarray
+        Time array.
+    y : ndarray
+        Solution array of shape (len(t), len(y0)).
+    """
+    t0, tf = t_span
+    n_steps = int(np.ceil((tf - t0) / h))
+    t = np.linspace(t0, tf, n_steps + 1)
+    y = np.zeros((n_steps + 1, len(y0)))
+    y[0] = y0
+
+    for i in range(n_steps):
+        y[i+1] = rk4_step(f, y[i], t[i], h, params)
+        y[i+1] = np.maximum(y[i+1], 0.0)
+
+    return t, y
+
+# =====================================================================
+# 2. MODEL SVIR + BOOSTER
+# =====================================================================
+
+def svir_booster_rhs(y, t, params):
+    """
+    RHS of the SVIR model with primary vaccination and booster.
+
+    Variables:
+    S  = susceptible
+    V  = vaccinated (primary)
+    Vb = vaccinated with booster
+    I  = infectious
+    R  = recovered
+    """
+    S, V, Vb, I, R = y
+
+    beta = params['beta']
+    sigma = params['sigma']
+    eta = params['eta']
+    alpha = params['alpha']
+    rho = params['rho']
+    gamma = params['gamma']
+    mu = params['mu']
+    Lambda = params['Lambda']
+
+    N = S + V + Vb + I + R
+    if N <= 0:
+        return np.zeros(5)
+
+    # Force of infection components
+    inf_S  = beta * S * I / N
+    inf_V  = sigma * V * I / N
+    inf_Vb = eta * Vb * I / N
+
+    dS  = Lambda - inf_S - alpha*S - mu*S
+    dV  = alpha*S - inf_V - rho*V - mu*V
+    dVb = rho*V - inf_Vb - mu*Vb
+    dI  = inf_S + inf_V + inf_Vb - (gamma + mu)*I
+    dR  = gamma*I - mu*R
+
+    return np.array([dS, dV, dVb, dI, dR])
+
+# =====================================================================
+# 3. SIMULASI + PLOT KOMPONEN
+# =====================================================================
+
+def simulate(params, y0, t_span=(0, 5*365), h=0.5):
+    """Runs RK4 simulation for the SVIR model."""
+    return integrate_rk4(svir_booster_rhs, y0, t_span, h, params)
+
+
+def plot_compartments(t, y, title=None, savefile=None):
+    """
+    Plots SVIR compartment dynamics with academic-quality formatting.
+    """
+    S, V, Vb, I, R = y.T
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(t, S,  linewidth=2, label="S (Susceptible)")
+    plt.plot(t, V,  linewidth=2, label="V (Vaccinated)")
+    plt.plot(t, Vb, linewidth=2, label="Vb (Booster)")
+    plt.plot(t, I,  linewidth=2, label="I (Infectious)")
+    plt.plot(t, R,  linewidth=2, label="R (Recovered)")
+
+    plt.xlabel("Time (days)")
+    plt.ylabel("Number of individuals")
+    plt.title(title or "Dynamics of the SVIR Model with Booster")
+    plt.grid(alpha=0.3)
+    plt.legend()
+
+    if savefile:
+        plt.savefig(savefile, dpi=400, bbox_inches="tight")
+    plt.show()
+
+
+def summarize_results(t, y):
+    """Returns summary statistics (peak I, final values, etc.)."""
+    S, V, Vb, I, R = y.T
+    idx = np.argmax(I)
+
+    return {
+        "peak_I": I[idx],
+        "time_peak": t[idx],
+        "final_S": S[-1],
+        "final_V": V[-1],
+        "final_Vb": Vb[-1],
+        "final_I": I[-1],
+        "final_R": R[-1],
+        "final_N": S[-1] + V[-1] + Vb[-1] + I[-1] + R[-1],
+    }
+
+# =====================================================================
+# 4. PERBANDINGAN BOOSTER vs TANPA BOOSTER
+# =====================================================================
+
+def compare_with_without_booster(params, y0, t_span=(0,5*365), h=0.5):
+    """
+    Compares infectious curves with and without booster vaccination.
+    """
+    # With booster
+    t1, y1 = simulate(params, y0, t_span, h)
+    summary_with = summarize_results(t1, y1)
+
+    # Without booster (rho = 0)
+    params2 = params.copy()
+    params2['rho'] = 0.0
+    y0_no = y0.copy()
+    y0_no[2] = 0.0
+
+    t2, y2 = simulate(params2, y0_no, t_span, h)
+    summary_no = summarize_results(t2, y2)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(t1, y1[:,3], linewidth=2, label="With booster")
+    plt.plot(t2, y2[:,3], linewidth=2, linestyle="--", label="Without booster")
+    plt.xlabel("Time (days)")
+    plt.ylabel("Infectious individuals")
+    plt.title("Comparison of Infection Dynamics: With vs Without Booster")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.show()
+
+    return summary_with, summary_no
+
+# =====================================================================
+# 5. ANALISIS SENSITIVITAS BOOSTER
+# =====================================================================
+
+def sweep_rho(params, y0, rhos, t_span=(0,365*3), h=1.0):
+    """
+    Sweeps different booster rates rho and returns DataFrame of results.
+    """
+    results = []
+    for rho in rhos:
+        p = params.copy()
+        p['rho'] = rho
+        t, y = simulate(p, y0, t_span, h)
+        summary = summarize_results(t, y)
+        summary["rho"] = rho
+        results.append(summary)
+    return pd.DataFrame(results)
+
+# =====================================================================
+# 6. EFFECTIVE REPRODUCTION NUMBER Re(t)
+# =====================================================================
+
+def compute_Re(t, y, params):
+    """
+    Computes the effective reproduction number Re(t).
+    """
+    S = y[:,0]
+    V = y[:,1]
+    Vb = y[:,2]
+
+    beta  = params['beta']
+    sigma = params['sigma']
+    eta   = params['eta']
+    gamma = params['gamma']
+    mu    = params['mu']
+
+    denominator = gamma + mu
+    Re = (beta*S + sigma*V + eta*Vb) / denominator
+    return Re
+
+
+def plot_Re(t, Re, title="Effective Reproduction Number Re(t)", savefile=None):
+    """
+    Plots the effective reproduction number Re(t).
+    """
+    plt.figure(figsize=(10,5))
+    plt.plot(t, Re, linewidth=2, label="Re(t)")
+    plt.axhline(1, color='red', linestyle='--', linewidth=1)
+    plt.title(title)
+    plt.xlabel("Time (days)")
+    plt.ylabel("Re(t)")
+    plt.grid(alpha=0.3)
+    plt.legend()
+
+    if savefile:
+        plt.savefig(savefile, dpi=400, bbox_inches="tight")
+    plt.show()
+
+# =====================================================================
+# 7. TOTAL KASUS KUMULATIF
+# =====================================================================
+
+def incidence_rate(y, params):
+    """
+    Computes incidence rate λ(t) = I * force_of_infection.
+    """
+    S, V, Vb, I, R = y.T
+    N = S + V + Vb + I + R
+
+    beta  = params['beta']
+    sigma = params['sigma']
+    eta   = params['eta']
+
+    force_of_infection = (beta*S + sigma*V + eta*Vb) / N
+    return I * force_of_infection
+
+
+def compute_cumulative_cases(t, y, params):
+    """
+    Trapezoidal integration of incidence rate to compute cumulative cases.
+    """
+    lambda_t = incidence_rate(y, params)
+    C = np.zeros_like(t)
+
+    for i in range(1, len(t)):
+        dt = t[i] - t[i-1]
+        C[i] = C[i-1] + 0.5*(lambda_t[i] + lambda_t[i-1])*dt
+
+    return C
+
+
+def plot_cumulative_cases(t, C, title="Cumulative Cases", savefile=None):
+    """
+    Plots total cumulative cases.
+    """
+    plt.figure(figsize=(10,5))
+    plt.plot(t, C, linewidth=2, label="C(t)")
+    plt.xlabel("Time (days)")
+    plt.ylabel("Total cases")
+    plt.title(title)
+    plt.grid(alpha=0.3)
+    plt.legend()
+
+    if savefile:
+        plt.savefig(savefile, dpi=400, bbox_inches="tight")
+    plt.show()
+
+# =====================================================================
+# 8. PARAMETER DEFAULT & MAIN
+# =====================================================================
+
+def default_parameters():
+    """
+    Provides epidemiological parameter set for measles-like dynamics.
+    """
+    N0 = 1_000_000
+    gamma = 1/7
+    R0 = 15
+    beta = R0 * gamma
+
+    params = {
+        "beta": beta,
+        "sigma": 0.05*beta,
+        "eta": 0.01*beta,
+        "alpha": 0.9/365,
+        "rho": 0.9/(5*365),
+        "gamma": gamma,
+        "mu": 1/(70*365),
+        "Lambda": (1/(70*365))*N0,
+    }
+
+    V0      = 0.7 * N0
+    Vb0     = 0
+    I0      = 10
+    R0_init = 0
+    S0      = N0 - (V0 + Vb0 + I0 + R0_init)
+
+    y0 = np.array([S0, V0, Vb0, I0, R0_init], dtype=float)
+    return params, y0
+
+
+if __name__ == "__main__":
+    params, y0 = default_parameters()
+
+    # Main simulation
+    t, y = simulate(params, y0)
+    plot_compartments(t, y, title="SVIR + Booster Dynamics")
+
+    # Effective reproduction number
+    Re = compute_Re(t, y, params)
+    plot_Re(t, Re)
+
+    # Cumulative cases
+    C = compute_cumulative_cases(t, y, params)
+    plot_cumulative_cases(t, C)
+    print("Total cumulative cases:", C[-1])
+
+    # Comparison with and without booster
+    summary_with, summary_no = compare_with_without_booster(params, y0)
+    print("\nWITH booster:", summary_with)
+    print("WITHOUT booster:", summary_no)
